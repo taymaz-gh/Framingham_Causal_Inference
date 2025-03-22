@@ -1,0 +1,410 @@
+---
+title: "appendix"
+author: "Taymaz Ghaneh, Maryam Loni, Xixi Zheng"
+date: "2025-03-30"
+output: pdf_document
+---
+
+```{r}
+library(dagitty)
+library(ggplot2)
+library(GGally)
+library(gridExtra)
+library(cobalt)
+library(survey)
+library(mice)
+library(survey)
+library(dagitty)
+library(dplyr)
+library(devtools)
+library(mice)
+library(reshape2)
+library(BaylorEdPsych)
+library(VIM)
+library(naniar)
+library(stdReg)
+```
+
+```{r}
+setwd('C:/Users/zxx/OneDrive/Desktop/yr1sem2/causal/group assignment')
+data = data.frame(read.csv('2025_framingham_assignment.csv'))
+data$HYPERTEN = 0
+data[data$SYSBP >= 140 | data$DIABP>= 90 , 'HYPERTEN'] = 1
+```
+
+# DAGs
+
+1. Build the first DAG - "g.postulated", according to expertise knowledge.
+
+```{r}
+g.postulated <- dagitty('dag {
+  SEX [pos="-1, 2"]
+  AGE [pos="-3.7, 0.5"]
+  CURSMOKE [pos="-0.5, 0.4"]
+  DIABETES [pos="-3, 1.9"]
+  BPMEDS [pos="-2.5, 0"]
+  BMI [pos="-4, 1.3"]
+  HEARTRTE [pos="0, 1"]
+  HYPERTEN [pos="-2, 1.2"]
+  EDUC [pos="-0.3,1.48"]
+  
+  SEX -> { CURSMOKE BMI HEARTRTE DIABETES HYPERTEN }
+  AGE  -> { CURSMOKE DIABETES BMI HYPERTEN BPMEDS EDUC }
+  CURSMOKE  -> { BMI HEARTRTE HYPERTEN BPMEDS }
+  DIABETES -> { BMI HEARTRTE HYPERTEN BPMEDS }
+  BPMEDS -> HYPERTEN
+  BMI -> { BPMEDS HYPERTEN }
+  HEARTRTE -> { BPMEDS HYPERTEN }
+  EDUC -> { BMI CURSMOKE }
+  }
+')
+ 
+plot(g.postulated, layout = "circle") 
+```
+
+2. Find out missing edges in the first DAG and add it -> "g.amended".
+
+```{r}
+d = na.omit(data)
+r = localTests(g.postulated, d)
+r = r[p.adjust(r$p.value) < 0.05, ]
+r = r[order(r$p.value), ]
+par(mar = c(4,6,4,0))
+#plotLocalTestResults(r, bty = "n", xlim = c(-0.4, 0.4), ylim = c(0.1, 3.1),
+#                    axis.pars = list(las = 1, lty = 0, cex.axis = 0.6))
+```
+
+```{r}
+g.amended <- dagitty('dag {
+  SEX [pos="-1, 2"]
+  AGE [pos="-3.7, 0.5"]
+  CURSMOKE [pos="-0.5, 0.4"]
+  DIABETES [pos="-3, 1.9"]
+  BPMEDS [pos="-2.5, 0"]
+  BMI [pos="-4, 1"]
+  HEARTRTE [pos="0, 1"]
+  HYPERTEN [pos="-2, 1.2"]
+  EDUC [pos="-0.3,1.48"]
+  
+  SEX -> { CURSMOKE DIABETES BMI HEARTRTE HYPERTEN BPMEDS }
+  AGE  -> { CURSMOKE DIABETES HEARTRTE HYPERTEN BPMEDS EDUC BMI }
+  CURSMOKE  -> { BMI HEARTRTE HYPERTEN BPMEDS }
+  DIABETES -> { BMI HEARTRTE HYPERTEN BPMEDS }
+  BPMEDS -> HYPERTEN
+  BMI -> { BPMEDS HYPERTEN HEARTRTE }
+  HEARTRTE -> { BPMEDS HYPERTEN }
+  EDUC -> { CURSMOKE BMI HEARTRTE HYPERTEN }
+  }
+')
+
+plot(g.amended, layout = "circle") 
+r1 = localTests(g.amended, d) # no significant relationship
+r1 = r1[p.adjust(r1$p.value) < 0.05, ]
+r1 = r1[order(r1$p.value), ]
+```
+
+3. Find the confounders
+
+```{r}
+adjustmentSets(g.amended, exposure = "CURSMOKE", outcome = "HYPERTEN",type = 'all')
+```
+
+# Missing data
+
+1. Generate a matrix of missing data patterns and visualize missing patterns.
+
+```{r}
+#install_github("alagerberg/BaylorEdPsych")
+md.pattern(data)
+md_data <- md.pattern(data, plot = FALSE) 
+md_data <- md_data[, -ncol(md_data)]
+md_df <- as.data.frame(md_data)  
+
+# Convert row names into a column
+md_df$Pattern <- rownames(md_df)
+md_long <- melt(md_df, id.vars = "Pattern")
+
+ggplot(md_long, aes(x = variable, y = Pattern, fill = value)) +
+  geom_tile(color = "black") +
+  scale_fill_gradient(low = "white", high = "blue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +  # Rotate labels
+  labs(title = "Missing Data Pattern", x = "Variables", y = "Patterns")
+```
+
+2. LittleMCAR is used to test whether the missing pattern of data is MCAR
+
+not MCAR -> use likelihood based method
+
+```{r}
+LittleMCAR(data)
+```
+
+# description analysis and testing of hypothesis
+
+1. First we take a look at the proportion cross-table between the exposure and the income
+
+```{r CrossTable}
+tab = table(data$CURSMOKE, data$HYPERTEN)
+round(prop.table((tab), 1),4)
+```
+2. Check positivity
+
+```{r Pos,fig.width=3, fig.height=3, out.width="50%", out.height="50%"}
+par(mfrow=c(2,2))
+library(ggplot2)
+library(gridExtra)
+
+a = 6 ;  b = 8 ;  c = 8
+
+density1 = ggplot(data, aes(x=AGE, fill=factor(CURSMOKE))) + 
+  geom_density(alpha=0.5) +
+  labs(title="AGE by CURSMOKE")+
+  theme( legend.position = "none",
+    plot.title = element_text(size = a),  # Title font size
+    axis.title.x = element_text(size = b),  # X-axis label font size
+    axis.title.y = element_text(size = c) )  # Y-axis label font size (if needed)
+
+grid.arrange(density1, ncol = 1, nrow=1)
+```
+
+3. check exchangeability
+
+```{r Exc, fig.width=8, fig.height=2, out.width="80%", out.height="30%"}
+# Proportion of Smokers by Age Group
+bar1 = ggplot(data, aes(x = cut(AGE, 
+                         breaks = c(30, 40, 50, 60, 70), 
+                         labels = c("30-40", "40-50", "50-60", "60-70"), 
+                         include.lowest = TRUE)
+                 , fill = factor(CURSMOKE))) +
+  geom_bar(position = "fill") +  
+  labs(title = "", 
+       x = "Age Group", 
+       y = "Smoker(blue)/non-Smoker(pink) \n Percentage") +
+  scale_fill_manual(values = c("pink","steelblue"), 
+                    name = "Smoking Status",
+                    labels = c("Non-Smoker", "Smoker")) +
+  scale_y_continuous(labels = scales::percent)  +
+  theme( legend.position = "none",
+         plot.title = element_text(size = a),  # Title font size
+         axis.title.x = element_text(size = b),  # X-axis label font size
+         axis.title.y = element_text(size = c) ,
+         panel.grid.major = element_blank(),
+         panel.grid.minor = element_blank(),
+         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+# Proportion of Smokers by Diabetes
+bar2 = ggplot(data, aes(x = factor(DIABETES), fill = factor(CURSMOKE))) +
+  geom_bar(position = "fill") +  
+  labs(title = "", 
+       x = "Diabetes", 
+       y = "") +
+  scale_fill_manual(values = c("pink","steelblue"), 
+                    name = "Smoking Status",
+                    labels = c("Non-Smoker", "Smoker")) +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +  # Custom labels
+  scale_y_continuous(labels = scales::percent) +
+  theme( legend.position = "none",
+         plot.title = element_text(size = a),  # Title font size
+         axis.title.x = element_text(size = b),  # X-axis label font size
+         axis.title.y = element_text(size = c) ,
+         panel.grid.major = element_blank(),
+         panel.grid.minor = element_blank(),
+         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Proportion of Smokers by Education
+bar3 = ggplot(data, aes(x = factor(EDUC), fill = factor(CURSMOKE))) +
+  geom_bar(position = "fill") +  
+  labs(title = "", 
+       x = "Education", 
+       y = "") +
+  scale_fill_manual(values = c("pink","steelblue"), 
+                    name = "Smoking Status",
+                    labels = c("Non-Smoker", "Smoker")) +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +  # Custom labels
+  scale_y_continuous(labels = scales::percent) +
+  theme( legend.position = "none",
+         plot.title = element_text(size = a),  # Title font size
+         axis.title.x = element_text(size = b),  # X-axis label font size
+         axis.title.y = element_text(size = c) ,
+         panel.grid.major = element_blank(),
+         panel.grid.minor = element_blank(),
+         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+# Proportion of Smokers by Sex
+bar4 = ggplot(data, aes(x = factor(SEX), fill = factor(CURSMOKE))) +
+  geom_bar(position = "fill") +  
+  labs(title = "", 
+       x = "Sex", 
+       y = "") +
+  scale_fill_manual(values = c("pink","steelblue"), 
+                    name = "Smoking Status",
+                    labels = c("Non-Smoker", "Smoker")) +
+  scale_x_discrete(labels = c("1" = "Male", "2" = "Female")) +  # Custom labels
+  scale_y_continuous(labels = scales::percent)  +
+  theme( legend.position = "none",
+         plot.title = element_text(size = a),  # Title font size
+         axis.title.x = element_text(size = b),  # X-axis label font size
+         axis.title.y = element_text(size = c) ,
+         panel.grid.major = element_blank(),
+         panel.grid.minor = element_blank() ,
+         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1) )
+
+grid.arrange(bar1, bar2, bar3, bar4,  ncol = 4, nrow=1)
+```
+
+4. Check the balance (exchangeability) after IPW
+
+```{r LOVE, message = FALSE, warning = FALSE, fig.width=5, fig.height=2, out.width="80%", out.height="30%"}
+# Drawing LOVE Plot:
+library(cobalt)
+library(survey)
+
+# Define confounder set
+confounders <- c("EDUC", "AGE", "SEX", "DIABETES")
+
+# Function to estimate ACE using IPW
+estimate_ACE <- function(confounders, plot_title) {
+  
+  # Step 1: Remove rows with missing values in CURSMOKE or any of the confounders
+  data_clean <- na.omit(data[, c("CURSMOKE", confounders, "HYPERTEN")])  # Assuming HYPERTEN is the outcome variable
+  
+  # Step 2: Estimate propensity scores using glm
+  ps_model <- glm(CURSMOKE ~ ., data = data_clean[, c("CURSMOKE", confounders)], family = binomial())
+  data_clean$propensity_score <- fitted.values(ps_model)
+  
+  # Step 3: Calculate inverse probability weights (IPW)
+  data_clean$weights <- ifelse(data_clean$CURSMOKE == 1, 1 / data_clean$propensity_score, 1 / (1 - data_clean$propensity_score))
+  
+  # Step 4: Estimate ATE using weighted logistic regression (glm)
+  ace_model <- glm(HYPERTEN ~ CURSMOKE, data = data_clean, weights = weights, family = binomial())
+  
+  # Step 5: Extract ATE (log odds difference)
+  ATE <- coef(ace_model)["CURSMOKE"]
+  
+  # Convert ATE from log odds to risk difference (optional)
+  ATE_rd <- plogis(coef(ace_model)["CURSMOKE"]) - plogis(0)
+  
+  # Print ACE estimation result (both log odds and risk difference)
+  print(paste("ATE (Log Odds) for", plot_title, ":", round(ATE, 4)))
+  print(paste("ATE (Risk Difference) for", plot_title, ":", round(ATE_rd, 4)))
+  
+  # Step 6: Check balance using LOVE plot (from cobalt package)
+  covariates <- data_clean[, confounders]  # Subset data for covariates
+  # bal.tab(covariates, treat = data_clean$CURSMOKE, weights = data_clean$weights, method = "weighting", un = TRUE)  # Balance check
+  love.plot(covariates, treat = data_clean$CURSMOKE, weights = data_clean$weights, method = "weighting", binary = "std", threshold = .1)  # LOVE plot
+}
+
+# Run the analysis for any confounder set:
+estimate_ACE(confounders, "Confounders: EDUC, AGE, SEX, DIABETES")
+```
+
+# Model Selection
+
+Because of the DAG we chose SEX, EDUC, AGE as covariates. Here are checking using step-wise model selection and cross-validation.
+
+```{r}
+# Step-wise Model Selection
+
+# Select specific columns and create a new dataframe
+data_extract <- data[, c("HYPERTEN", "CURSMOKE", "AGE", "EDUC", 
+                         "SEX", "BMI", "DIABETES", "HEARTRTE", "RANDID")]
+
+
+x = as.matrix( data_extract[ , !names(data_extract)%in% c("HYPERTEN","RANDID") ] )
+y = data_extract$HYPERTEN
+
+n <- length(y)
+
+set.seed(123)
+train_idx <- sample(1:n, size = n*.8)
+
+train_dat <- data_extract[ train_idx, !names(data_extract)%in% c("RANDID")]
+test_dat  <- data_extract[-train_idx, !names(data_extract)%in% c("RANDID")]
+
+x_train <- model.matrix(HYPERTEN ~ . -1, train_dat)     
+x_test  <- model.matrix(HYPERTEN ~ . -1, test_dat )
+y_train <- train_dat$HYPERTEN
+y_test  <-  test_dat$HYPERTEN   
+
+
+# Stepwise selection (AIC/BIC)
+
+# the research question is about 'CURSMOKE', thus we have to use 
+# the 'scope' argument to ensure "CURSMOKE" is always included in the model:
+# ^2 tells R to also include all possible first-order interactions (in addition to all main effects)
+full_model    <- glm(HYPERTEN ~ .^2, data = train_dat, family = binomial)
+reduced_model <- glm(HYPERTEN ~ CURSMOKE, data = train_dat, family = binomial)  # Minimum model with CURSMOKE
+stepwise_model<- step(full_model, scope = list(lower = reduced_model, upper = full_model), direction = "both")
+# scope = list() forces "CURSMOKE" to always stay in the model."CURSMOKE"
+# cannot be removed because it’s in the lower bound of model selection.
+
+#summary(stepwise_model)
+```
+
+1. best model according to DAG adjustmentSets()
+
+model1 = glm(HYPERTEN ~ CURSMOKE + AGE + DIABETES + EDUC + SEX , family = binomial, data = data)
+
+
+2. best model according to stepwise model selection ( step() ) and cross-validation ( cv.glmnet() ) without interactions :
+
+model2 = glm(HYPERTEN ~ CURSMOKE + AGE + BMI + HEARTRTE , family = binomial, data = data)
+
+
+3. Finally, we decide to chose:
+
+model_best = glm(HYPERTEN ~ CURSMOKE + AGE + DIABETES + EDUC + SEX + SEX:AGE , family = binomial, data = data)
+
+# Model Interpretation
+
+```{r}
+model_best = glm(HYPERTEN ~ CURSMOKE + AGE + DIABETES + EDUC + SEX + SEX:AGE , family = binomial, data = data)
+summary(model_best)
+```
+
+1. ATE
+
+```{r}
+# codes like those from practical answers of week4 lecture:
+
+data.1 = data
+data.1$CURSMOKE = 1
+
+EYhat1 = predict(model_best, newdata = data.1, type = "response")
+EY1<-mean(EYhat1,na.rm=T)
+# EY1  # 0.3413692
+
+data.0 = data
+data.0$CURSMOKE = 0
+
+EYhat0 = predict(model_best, newdata = data.0, type = "response")
+EY0<-mean(EYhat0,na.rm=T)
+# EY0  # 0.3872214
+
+rd = EY1-EY0 # ATE  -0.04751522 
+rr = EY1/EY0
+or = EY1*(1-EY0)/(EY0*(1-EY1))
+c("E(Y|0)"= EY0, "E(Y|1)"=EY1, "RD"=rd, "RR"=rr, "OR"=or)
+```
+
+```{r}
+fit.std = stdGlm(fit = model_best, data = data, X = "CURSMOKE")
+summary(fit.std)
+#ATE 95%CI 
+ate.std = summary(fit.std, contrast = 'difference', reference = 0)
+ate.std
+```
+
+2. ATT
+
+```{r}
+# dataset with only the treated individuals
+fit.std.treat = stdGlm(fit = model_best, data = data, X = "CURSMOKE", subsetnew = (CURSMOKE == 1) )
+summary(fit.std.treat)
+att.std = summary(fit.std.treat, contrast = 'difference', reference = 0)
+att.std
+```
+
